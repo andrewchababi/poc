@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from enum import Enum
 
-class LabPricingEngine:
+class FinalPricingEngine:
     def __init__(self):
         # 1. COSTS (Reagents Only)
         self.reagent_costs = {
@@ -30,12 +30,15 @@ class LabPricingEngine:
             "CBC": 29, "ELECTROLYTES": 46, "HARMONY": 1155
         }
 
-        # 3. OVERHEAD SCENARIOS (Fixed Cost Per Patient)
+        # 3. OVERHEAD SCENARIOS
         self.scenarios = {
-            "Today (60 reqs)": 85.00,
-            "Q1 '26 (150 reqs)": 34.00,
-            "Q3 '26 (300 reqs)": 17.00
+            "Today": 85.00,
+            "Jan 1 '26": 65.00
         }
+
+        # 4. SURCHARGES
+        self.donation_per_req = 5.00
+        self.rev_share_per_req = 0.50
 
     def get_cost(self, code):
         return self.reagent_costs.get(code, 0.0)
@@ -43,45 +46,44 @@ class LabPricingEngine:
     def calculate_quote(self, tests):
         if not tests:
             return None
-        
-        # --- PRICING LOGIC ---
+
         line_items = []
         for t in tests:
             code = t.upper().replace(" ", "_")
-            fee = self.list_prices.get(code, 0)
-            cost = self.get_cost(code)
-            overhead_marginal = 1.00
-            line_items.append({'code': code, 'fee': fee, 'cost': cost, 'ovh': overhead_marginal})
+            line_items.append({
+                'code': code,
+                'fee': self.list_prices.get(code, 0),
+                'cost': self.get_cost(code),
+                'ovh': 1.00
+            })
 
-        # Sort by Price (Highest is Anchor)
         line_items.sort(key=lambda x: x['fee'], reverse=True)
-        
+
         total_price = 0
         total_variable_cost = 0
         breakdown = []
-        
-        # 1. ANCHOR (100% Price)
+
+        # ANCHOR
         anchor = line_items[0]
-        anchor_price = anchor['fee']
-        total_price += anchor_price
-        total_variable_cost += (anchor['cost'] + anchor['ovh'])
+        total_price += anchor['fee']
+        total_variable_cost += anchor['cost'] + anchor['ovh']
         breakdown.append({
             'type': 'ANCHOR',
             'code': anchor['code'],
-            'price': anchor_price,
+            'price': anchor['fee'],
             'cost': anchor['cost'],
             'overhead': anchor['ovh'],
             'list_price': anchor['fee']
         })
 
-        # 2. ADD-ONS (50% Price, with Floor)
+        # ADD-ONS
         for item in line_items[1:]:
             target_price = item['fee'] * 0.50
             floor_price = (item['cost'] + item['ovh']) * 3.0
             final_price = max(target_price, floor_price)
-            
+
             total_price += final_price
-            total_variable_cost += (item['cost'] + item['ovh'])
+            total_variable_cost += item['cost'] + item['ovh']
             breakdown.append({
                 'type': 'ADD-ON',
                 'code': item['code'],
@@ -91,8 +93,30 @@ class LabPricingEngine:
                 'list_price': item['fee']
             })
 
+        # SURCHARGES
+        surcharge_total = self.donation_per_req + self.rev_share_per_req
+        total_price += surcharge_total
+
+        breakdown.append({
+            'type': 'SURCHARGE',
+            'code': 'CHARITY',
+            'price': self.donation_per_req,
+            'cost': 0,
+            'overhead': 0,
+            'list_price': self.donation_per_req
+        })
+
+        breakdown.append({
+            'type': 'SURCHARGE',
+            'code': 'REV_SHARE',
+            'price': self.rev_share_per_req,
+            'cost': 0,
+            'overhead': 0,
+            'list_price': self.rev_share_per_req
+        })
+
         contribution_margin = total_price - total_variable_cost
-        
+
         profitability = {}
         for scenario, fixed_ovh in self.scenarios.items():
             net_profit = contribution_margin - fixed_ovh
@@ -112,6 +136,7 @@ class LabPricingEngine:
         }
 
 
+
 # Page config
 st.set_page_config(page_title="Lab Pricing Engine", layout="wide", initial_sidebar_state="collapsed")
 
@@ -119,7 +144,7 @@ st.title("💊 Lab Pricing Engine")
 st.markdown("Calculate patient pricing and profitability for lab test panels")
 
 # Initialize engine
-engine = LabPricingEngine()
+engine = FinalPricingEngine()
 
 # Get all available tests
 all_tests = sorted(list(engine.list_prices.keys()))
