@@ -1,4 +1,4 @@
-class LabPricingEngine:
+class FinalPricingEngine:
     def __init__(self):
         # 1. COSTS (Reagents Only)
         self.reagent_costs = {
@@ -27,12 +27,14 @@ class LabPricingEngine:
         }
 
         # 3. OVERHEAD SCENARIOS (Fixed Cost Per Patient)
-        # Based on $5100 daily fixed cost estimate ($85 * 60)
         self.scenarios = {
-            "Today (60 reqs)": 85.00,
-            "Q1 '26 (150 reqs)": 34.00,
-            "Q3 '26 (300 reqs)": 17.00
+            "Today": 85.00,
+            "Jan 1 '26": 65.00  # Explicit $65 model
         }
+        
+        # 4. SURCHARGES (Pass-Through)
+        self.donation_per_req = 5.00
+        self.rev_share_per_req = 0.50
 
     def get_cost(self, code):
         return self.reagent_costs.get(code, 0.0)
@@ -46,75 +48,62 @@ class LabPricingEngine:
             code = t.upper().replace(" ", "_")
             fee = self.list_prices.get(code, 0)
             cost = self.get_cost(code)
-            # Overhead logic: $3 for single, $1 if bundled.
-            # We'll apply $1 per test since this function generates bundles.
             overhead_marginal = 1.00 
             line_items.append({'code': code, 'fee': fee, 'cost': cost, 'ovh': overhead_marginal})
 
-        # Sort by Price (Highest is Anchor)
         line_items.sort(key=lambda x: x['fee'], reverse=True)
         
         total_price = 0
-        total_variable_cost = 0 # Reagents + Marginal Overhead ($1/test)
+        reagent_lab_cost = 0 
         
         breakdown = []
         
-        # 1. ANCHOR (100% Price)
+        # 1. ANCHOR
         anchor = line_items[0]
         anchor_price = anchor['fee']
         total_price += anchor_price
-        total_variable_cost += (anchor['cost'] + anchor['ovh'])
+        reagent_lab_cost += (anchor['cost'] + anchor['ovh'])
         breakdown.append(f"ANCHOR: {anchor['code']:<10} ${anchor_price:.2f}")
 
-        # 2. ADD-ONS (50% Price, with Floor)
+        # 2. ADD-ONS
         for item in line_items[1:]:
             target_price = item['fee'] * 0.50
             floor_price = (item['cost'] + item['ovh']) * 3.0
             final_price = max(target_price, floor_price)
             
             total_price += final_price
-            total_variable_cost += (item['cost'] + item['ovh'])
+            reagent_lab_cost += (item['cost'] + item['ovh'])
             breakdown.append(f"ADD-ON: {item['code']:<10} ${final_price:.2f} (List: ${item['fee']})")
+
+        # 3. SURCHARGES
+        total_price += self.donation_per_req
+        total_price += self.rev_share_per_req
+        
+        breakdown.append(f"SURCHARGE 1:     ${self.donation_per_req:.2f} (Charity)")
+        breakdown.append(f"SURCHARGE 2:     ${self.rev_share_per_req:.2f} (Rev Share)")
 
         # --- OUTPUT ---
         print(f"\n{'='*40}")
-        print(f"SPONTANEOUS PANEL QUOTE: {' + '.join(tests)}")
+        print(f"FINAL QUOTE: {' + '.join(tests)}")
         print(f"{'-'*40}")
         for line in breakdown:
             print(line)
         print(f"{'-'*40}")
-        print(f"TOTAL PATIENT PRICE:  ${total_price:.2f}")
-        print(f"Total Variable Cost:  ${total_variable_cost:.2f} (Reagents + Lab Labor)")
         
-        contribution_margin = total_price - total_variable_cost
-        print(f"Contribution Margin:  ${contribution_margin:.2f} (Pays down fixed overhead)")
+        total_pass_through = self.donation_per_req + self.rev_share_per_req
+        contribution = total_price - (reagent_lab_cost + total_pass_through)
         
-        print(f"\n--- PROFITABILITY FORECAST ---")
+        print(f"TOTAL PATIENT PRICE:    ${total_price:.2f}")
+        print(f"Contribution Margin:    ${contribution:.2f}")
+        
+        print(f"\n--- NET PROFIT FORECAST ---")
         for scenario, fixed_ovh in self.scenarios.items():
-            # Net Profit = Contribution - Fixed Overhead per Patient
-            net_profit = contribution_margin - fixed_ovh
+            net_profit = contribution - fixed_ovh
             status = "✅ PROFIT" if net_profit > 0 else "❌ LOSS  "
-            print(f"{scenario:<18} (Ovh ${fixed_ovh:.0f}): {status} ${net_profit:>.2f}")
+            print(f"{scenario:<10} (Fixed ${fixed_ovh:.0f}): {status} ${net_profit:>.2f}")
         print(f"{'='*40}\n")
 
-# --- TEST SCENARIOS ---
-engine = LabPricingEngine()
-
-# Scenario A: Small Bundle (The "Loss Leader" problem)
-# TSH + Ferritin. 
-# Today: LOSS (because revenue < $85). 
-# Future: PROFIT (because revenue > $34).
+# Example: Run this for your key bundle types
+engine = FinalPricingEngine()
 engine.calculate_quote(["TSH", "FERRITIN"])
-
-# Scenario B: The "Upsell" (Adding 2 cheap tests fixes the profit)
-# TSH + Ferritin + B12 + Magnesium
-# Today: BREAK-EVEN (Revenue approaches $85).
-# Future: HUGE PROFIT.
 engine.calculate_quote(["TSH", "FERRITIN", "VIT_B12", "MAGNESIUM"])
-
-
-tests = input("Please choose the tests: \n")
-tests = tests.split(" ")
-
-engine.calculate_quote(tests)
-
